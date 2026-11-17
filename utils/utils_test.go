@@ -1,4 +1,4 @@
-package concourse
+package utils
 
 import (
 	"errors"

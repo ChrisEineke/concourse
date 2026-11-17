@@ -3,6 +3,7 @@ package concourse
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	ds "github.com/ipfs/go-datastore"
@@ -58,7 +59,7 @@ func (k *KademliaStateManager) OnPeersFound() error {
 	}
 	// transition to online state
 	k.IsOffline = false
-	fmt.Println("switched to online mode")
+	slog.Debug("found a peer -- switched to online mode")
 	return nil
 }
 

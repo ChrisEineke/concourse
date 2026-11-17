@@ -3,6 +3,7 @@ package concourse
 import (
 	"testing"
 
+	ds "github.com/ipfs/go-datastore"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 )
 
@@ -14,7 +15,6 @@ func TestStateVizString(t *testing.T) {
 	}{
 		{"Private", StateVizPrivate, "StateVizPrivate"},
 		{"Public", StateVizPublic, "StateVizPublic"},
-		{"PublicPrivate", StateVizPublicPrivate, "StateVizPublicPrivate"},
 		{"Illegal", StateViz(99), "Illegal StateViz value 99"},
 	}
 
@@ -29,11 +29,15 @@ func TestStateVizString(t *testing.T) {
 
 func TestNewKademliaStateManager(t *testing.T) {
 	var nilIpfs *dht.IpfsDHT
-	kms := NewKademliaStateManager(nilIpfs)
+	var nullDatastore = ds.NewNullDatastore()
+	kms := NewKademliaStateManager(nilIpfs, nullDatastore)
 	if kms == nil {
 		t.Fatal("NewKademliaStateManager returned nil")
 	}
 	if kms.Ipfs != nilIpfs {
 		t.Errorf("KademliaStateManager.Ipfs = %v, want %v", kms.Ipfs, nilIpfs)
+	}
+	if kms.Datastore != nullDatastore {
+		t.Errorf("KademliaStateManager.Datastore = %v, want %v", kms.Datastore, nullDatastore)
 	}
 }

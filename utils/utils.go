@@ -1,4 +1,4 @@
-package concourse
+package utils
 
 import (
 	"reflect"
@@ -8,6 +8,13 @@ import (
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/multiformats/go-multiaddr"
 )
+
+func Must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
 
 func Map[T any, U any](input []T, tr func(T) (U, error)) ([]U, error) {
 	result := make([]U, len(input))

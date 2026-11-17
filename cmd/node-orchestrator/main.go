@@ -6,5 +6,6 @@ import (
 
 func main() {
 	app := &concourse.NodeOrchestratorApp{}
+	app.Configure()
 	app.Run()
 }

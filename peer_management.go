@@ -26,20 +26,35 @@ func NewPeerManagement(host host.Host) *PeerManagement {
 	}
 }
 
-func (p *PeerManagement) ConnectToPeer(ctx context.Context, addr *peer.AddrInfo) error {
+// OnNewPeer reacts to the peer discovery task finding a new cluster peer. The
+// task runs periodically. Each cycle the task provides us with *every* peer that
+// is has found, so we ensure not to connect more than once to the same peer.
+func (p *PeerManagement) OnNewPeer(ctx context.Context, addr *peer.AddrInfo) error {
 	var peerState *PeerState
 	var ok bool
-	if peerState, ok = p.peerStates[addr.ID]; !ok {
-		if err := p.host.Connect(ctx, *addr); err != nil {
-			slog.ErrorContext(ctx, "failed to connect to peer", "addrInfo", addr, "error", err)
-			return err
-		}
-		slog.Info("connected to peer", "peerID", addr.ID)
-		peerState = &PeerState{
-			id:       addr.ID,
-			lastSeen: time.Now(),
-		}
-		p.peerStates[addr.ID] = peerState
+	if peerState, ok = p.peerStates[addr.ID]; ok {
+		peerState.lastSeen = time.Now()
+		slog.DebugContext(ctx,
+			"updated peer last-seen timestamp",
+			"peerID", addr.ID,
+			"timestamp", peerState.lastSeen)
+		return nil
 	}
+	if err := p.host.Connect(ctx, *addr); err != nil {
+		slog.ErrorContext(ctx,
+			"failed to connect to peer",
+			"peerID", addr.ID,
+			"addr", addr,
+			"error", err)
+		return err
+	}
+	peerState = &PeerState{
+		id:       addr.ID,
+		lastSeen: time.Now(),
+	}
+	p.peerStates[addr.ID] = peerState
+	slog.InfoContext(ctx,
+		"succesfully connected to peer",
+		"peerID", addr.ID)
 	return nil
 }

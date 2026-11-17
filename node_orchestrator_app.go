@@ -24,49 +24,50 @@ import (
 	"github.com/libp2p/go-libp2p/core/routing"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/multiformats/go-multiaddr"
+	"github.com/spf13/viper"
 )
 
-type NodeOrchestratorApp struct{}
+type NodeOrchestratorApp struct {
+	config struct {
+		Verbose          bool                  `mapstructure:"verbose"`
+		DbPath           pathlib.Path          `mapstructure:"db_path"`
+		SwarmKeyFileName string                `mapstructure:"swarm_key_filename"`
+		BootstrapNodes   []multiaddr.Multiaddr `mapstructure:"bootstrap_nodes"`
+	}
+	vi          *viper.Viper
+	rootSlogger *slog.Logger
+}
+
+func (app *NodeOrchestratorApp) Configure() {
+	app.vi = ViperSetup()
+	app.vi.SetDefault("verbose", false)
+	app.vi.SetDefault("db_path", "./data")
+	app.vi.SetDefault("swarm_key_filename", "swarm.key")
+	app.vi.SetDefault("bootstrap_nodes", []string{})
+	if err := app.vi.Unmarshal(&app.config); err != nil {
+		panic(err)
+	}
+
+	if app.config.Verbose {
+		app.rootSlogger = SlogSetup(slog.LevelDebug, true)
+	} else {
+		app.rootSlogger = SlogSetup(slog.LevelInfo, false)
+	}
+
+	slog.Info(
+		"configuration",
+		"verbose", app.config.Verbose,
+		"dbPath", app.config.DbPath.String(),
+		"swarmKeyFilename", app.config.SwarmKeyFileName,
+		"bootstrapNodes", app.config.BootstrapNodes)
+}
 
 func (app *NodeOrchestratorApp) Run() {
-	ctx, cancelFn := context.WithCancel(context.Background())
+	rootCtx, cancelFn := context.WithCancel(context.Background())
 	defer cancelFn()
 
-	// Must instantiate a custom logger as the first thing so that all logging
-	// conforms to our requirements.
-	slog.SetDefault(
-		slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})),
-	)
-
-	var config struct {
-		dbPath           pathlib.Path          `mapstructure:"db.path"`
-		swarmKeyFileName string                `mapstructure:"swarm.key.filename"`
-		bootstrapNodes   []multiaddr.Multiaddr `mapstructure:"bootstrap.nodes"`
-	}
-	vi := ViperSetup()
-
-	vi.SetDefault("db.path", "./data")
-	if err := vi.UnmarshalKey("db.path", &config.dbPath); err != nil {
-		panic(err)
-	}
-	fmt.Println("db path:", config.dbPath.String())
-
-	vi.SetDefault("swarm.key.filename", "swarm.key")
-	if err := vi.UnmarshalKey("swarm.key.filename", &config.swarmKeyFileName); err != nil {
-		panic(err)
-	}
-	fmt.Println("swarm key filename:", config.swarmKeyFileName)
-
-	vi.SetDefault("bootstrap.nodes", []string{})
-	if err := vi.UnmarshalKey("bootstrap.nodes", &config.bootstrapNodes); err != nil {
-		panic(err)
-	}
-	fmt.Println("bootstrap nodes:", config.bootstrapNodes)
-
 	// swarm key
-	rawSwarmKey, err := os.ReadFile(config.swarmKeyFileName)
+	rawSwarmKey, err := os.ReadFile(app.config.SwarmKeyFileName)
 	if err != nil {
 		panic(err)
 	}
@@ -89,12 +90,12 @@ func (app *NodeOrchestratorApp) Run() {
 	addrs, err := peerstore.AddrInfoToP2pAddrs(peerInfo)
 	fmt.Println("libp2p node address:", addrs[0])
 
-	pubSub, err := pubsub.NewGossipSub(ctx, host)
+	pubSub, err := pubsub.NewGossipSub(rootCtx, host)
 	if err != nil {
 		panic(err)
 	}
 
-	dhtDatastore, err := leveldb.NewDatastore(config.dbPath.String(), nil)
+	dhtDatastore, err := leveldb.NewDatastore(app.config.DbPath.String(), nil)
 	if err != nil {
 		panic(err)
 	}
@@ -112,8 +113,8 @@ func (app *NodeOrchestratorApp) Run() {
 	if err != nil {
 		panic(err)
 	}
-	if err := kademliaDht.Bootstrap(ctx); err != nil {
-		slog.ErrorContext(ctx, "failed to start kademlia dht bootstrap", "error", err.Error())
+	if err := kademliaDht.Bootstrap(rootCtx); err != nil {
+		slog.ErrorContext(rootCtx, "failed to start kademlia dht bootstrap", "error", err.Error())
 		panic(err)
 	}
 
@@ -123,28 +124,28 @@ func (app *NodeOrchestratorApp) Run() {
 	if err != nil {
 		panic(err)
 	}
-	go streamConsoleTo(ctx, nodeDiscoveryTopic)
+	go streamConsoleTo(rootCtx, nodeDiscoveryTopic)
 
 	subscription, err := nodeDiscoveryTopic.Subscribe()
 	if err != nil {
 		panic(err)
 	}
-	go printMessagesFrom(ctx, subscription)
+	go printMessagesFrom(rootCtx, subscription)
 
 	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDht)
 
 	peerDiscovery := NewDhtPeerDiscovery(
 		host,
 		routingDiscovery,
-		config.bootstrapNodes)
-	if err := peerDiscovery.Start(ctx); err != nil {
+		app.config.BootstrapNodes)
+	if err := peerDiscovery.Start(rootCtx); err != nil {
 		panic(err)
 	}
 
 	stateManager := NewKademliaStateManager(kademliaDht, dhtDatastore)
 
 	peerManagement := NewPeerManagement(host)
-	peerDiscovery.PeerDiscoveredEvt.On(peerManagement.ConnectToPeer)
+	peerDiscovery.PeerDiscoveredEvt.On(peerManagement.OnNewPeer)
 	peerDiscovery.PeerDiscoveredEvt.On(func(ctx context.Context, addr *peer.AddrInfo) error {
 		stateManager.OnPeersFound()
 		return nil
@@ -154,16 +155,16 @@ func (app *NodeOrchestratorApp) Run() {
 		ticker := time.NewTicker(time.Second)
 		for {
 			select {
-			case <-ctx.Done():
+			case <-rootCtx.Done():
 				return
 			case <-ticker.C:
 				var value1, value2 int = rand.IntN(1024 * 1024), 0
 
-				if err = stateManager.PutPath(ctx, StateVizPublic, value1, "test"); err != nil && !strings.Contains(err.Error(), "failed to find any peer in table") {
+				if err = stateManager.PutPath(rootCtx, StateVizPublic, value1, "test"); err != nil && !strings.Contains(err.Error(), "failed to find any peer in table") {
 					fmt.Println("failed to put kv", "re-trying in 1 second", err)
 					continue
 				}
-				if err = stateManager.GetPath(ctx, &value2, "test"); err != nil && !strings.Contains(err.Error(), "failed to find any peer in table") {
+				if err = stateManager.GetPath(rootCtx, &value2, "test"); err != nil && !strings.Contains(err.Error(), "failed to find any peer in table") {
 					_ = routing.ErrNotFound
 					fmt.Println("failed to get kv", "re-trying in 1 second", err)
 					continue

@@ -8,7 +8,7 @@ bin
 *.dll
 *.so
 *.dylib
-cmd/concourse-swarm-key-maker/concourse-swarm-key-maker
+cmd/swarm-key-maker/swarm-key-maker
 cmd/deployer/deployer
 cmd/node-orchestrator/node-orchestrator
 
@@ -37,3 +37,7 @@ go.work.sum
 .vscode/
 *.swp
 *.swo
+
+# Concourse cluster-specific files
+swarm.key
+data
