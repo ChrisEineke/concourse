@@ -33,8 +33,8 @@ var (
 )
 
 type ContainerSetV_1_0 struct {
-	Name          string                     `json:"name"`
-	Containers    []ContainerDefinitionV_1_0 `json:"containers"`
-	RestartPolicy RestartPolicy              `json:"restartPolicy"`
+	Name          string                     `json:"Name"`
+	Containers    []ContainerDefinitionV_1_0 `json:"Containers"`
+	RestartPolicy RestartPolicy              `json:"RestartPolicy"`
 	ID            string
 }

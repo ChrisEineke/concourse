@@ -6,14 +6,22 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
+const (
+	ContainerSetDocumentType = "ContainerSet"
+)
+
+var (
+	ContainerSetV_1_0_Version = semver.MustParse("1.0")
+)
+
 type DocumentHeaderType = string
 type DocumentHeaderVersion struct{ semver.Version }
 type DocumentHeaderHandlerImage = string
 
 type DocumentHeaderV1_0 struct {
-	Type         DocumentHeaderType         `json:"type"`
-	Version      DocumentHeaderVersion      `json:"version"`
-	HandlerImage DocumentHeaderHandlerImage `json:"handlerImage"`
+	Type         DocumentHeaderType         `json:"Type"`
+	Version      DocumentHeaderVersion      `json:"Version"`
+	HandlerImage DocumentHeaderHandlerImage `json:"HandlerImage"`
 }
 
 func (u *DocumentHeaderVersion) UnmarshalRJSON(data []byte) error {

@@ -6,10 +6,8 @@ import (
 	"log/slog"
 	"os"
 
-	docs "github.com/ChrisEineke/concourse/documents"
 	"github.com/chigopher/pathlib"
 	"github.com/moby/moby/client"
-	"github.com/rogpeppe/rjson"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -19,19 +17,25 @@ type DeployerApp struct {
 		verbose          bool          `mapstructure:"verbose"`
 		DocumentFilepath *pathlib.Path `mapstructure:"document"`
 	}
-	vi          *viper.Viper
-	rootSlogger *slog.Logger
-	deployer    Deployer
+	rootCtx         context.Context
+	rootCtxCancelFn func()
+	vi              *viper.Viper
+	rootSlogger     *slog.Logger
+	dockerApiClient *client.Client
+	deployer        *Deployer
 }
 
 func (app *DeployerApp) Configure() {
+	var err error
+
+	app.rootCtx, app.rootCtxCancelFn = context.WithCancel(context.Background())
+
 	pflag.Parse()
 
 	app.vi = ViperSetup()
 	app.vi.SetDefault("verbose", false)
-	app.vi.SetDefault("document", "")
 	app.vi.Set("document", pflag.Arg(0))
-	if err := app.vi.Unmarshal(&app.config); err != nil {
+	if err = app.vi.Unmarshal(&app.config); err != nil {
 		panic(err)
 	}
 
@@ -45,6 +49,16 @@ func (app *DeployerApp) Configure() {
 	} else {
 		SlogSetup(slog.LevelInfo, false)
 	}
+
+	app.dockerApiClient, err = client.New(
+		client.FromEnv,
+		client.WithUserAgent("concourse/v1.0"),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	app.deployer = NewDeployer(app.dockerApiClient)
 }
 
 func (app *DeployerApp) Run() {
@@ -57,36 +71,12 @@ func (app *DeployerApp) Run() {
 	}
 	slog.Debug("document", "filepath", app.config.DocumentFilepath.String())
 
-	rawDocument, err := app.config.DocumentFilepath.ReadFile()
-	if err != nil {
+	if err := app.deployer.DispatchDocument(app.rootCtx, app.config.DocumentFilepath); err != nil {
 		panic(err)
 	}
-	containerSetDoc := docs.ContainerSetDocumentV_1_0{}
-	if err = rjson.Unmarshal(rawDocument, &containerSetDoc); err != nil {
-		panic(err)
-	}
-	fmt.Println(containerSetDoc)
-	/*
-	 *res := SchemaContainerSetV_1_0.Validate(containerSetDoc)
-	 *if !res.Valid {
-	 *    slog.Debug("containerSet document failed to validate", "errors", res.LocalizedDetailedErrors)
-	 *    os.Exit(1)
-	 *}
-	 */
+}
 
-	ctx, cancelFn := context.WithCancel(context.Background())
-	defer cancelFn()
-
-	apiClient, err := client.New(
-		client.FromEnv,
-		client.WithUserAgent("concourse/v1.0"),
-	)
-	if err != nil {
-		panic(err)
-	}
-	defer apiClient.Close()
-
-	if err := app.deployer.DeployContainerSet_v1_0(ctx, &containerSetDoc, apiClient); err != nil {
-		panic(err)
-	}
+func (app *DeployerApp) Stop() {
+	defer app.rootCtxCancelFn()
+	defer app.dockerApiClient.Close()
 }

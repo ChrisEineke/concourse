@@ -6,7 +6,8 @@ type Port = uint16
 type Protocol = network.IPProtocol
 
 type Ports_1_0 struct {
-	HostPort      Port     `json:"hostPort"`
-	ContainerPort Port     `json:"containerPort"`
-	Protocol      Protocol `json:"protocol"`
+	HostPort      Port     `json:"HostPort"`
+	ContainerPort Port     `json:"ContainerPort"`
+	Protocol      Protocol `json:"Protocol"`
+	PortName      string   `json:"PortName"`
 }

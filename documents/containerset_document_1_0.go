@@ -25,5 +25,5 @@ func RestartPolicyIntToString(restartPolicy int) (string, error) {
 
 type ContainerSetDocumentV_1_0 struct {
 	DocumentHeaderV1_0
-	ContainerSet ContainerSetV_1_0 `json:"containerSet"`
+	ContainerSet ContainerSetV_1_0 `json:"ContainerSet"`
 }

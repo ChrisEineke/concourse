@@ -7,30 +7,67 @@ import (
 	"log/slog"
 	"net/netip"
 
+	"github.com/ChrisEineke/concourse/documents"
 	docs "github.com/ChrisEineke/concourse/documents"
 	"github.com/ChrisEineke/concourse/types"
+	"github.com/chigopher/pathlib"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/rogpeppe/rjson"
 	"golang.org/x/sync/errgroup"
 )
 
-type Deployer struct{}
+type Deployer struct {
+	apiClient *client.Client
+}
 
-func (d *Deployer) DeployContainerSet_v1_0(ctx context.Context, doc *docs.ContainerSetDocumentV_1_0, apiClient *client.Client) error {
+func NewDeployer(apiClient *client.Client) *Deployer {
+	return &Deployer{apiClient}
+}
+
+func (d *Deployer) DispatchDocument(ctx context.Context, docFilePath *pathlib.Path) error {
+	rawDocument, err := docFilePath.ReadFile()
+	if err != nil {
+		return err
+	}
+
+	headerDoc := docs.DocumentHeaderV1_0{}
+	if err := rjson.Unmarshal(rawDocument, &headerDoc); err != nil {
+		return err
+	}
+
+	switch headerDoc.Type {
+	case documents.ContainerSetDocumentType:
+		switch {
+		case headerDoc.Version.Equal(documents.ContainerSetV_1_0_Version):
+			containerSetDoc := &docs.ContainerSetDocumentV_1_0{}
+			if err := rjson.Unmarshal(rawDocument, &containerSetDoc); err != nil {
+				return err
+			}
+			return d.DeployContainerSet_v1_0(ctx, containerSetDoc)
+		default:
+			return ErrorUnsupportedDocumentVersion
+		}
+	default:
+		return ErrorUnsupportedDocumentType
+	}
+}
+
+func (d *Deployer) DeployContainerSet_v1_0(ctx context.Context, doc *docs.ContainerSetDocumentV_1_0) error {
 	slog.Info("Deploying ContainerSet V1.0...", "name", doc.ContainerSet.Name)
 
 	doc.ContainerSet.ID = rand.Text()[0:8]
 	slog.Debug("Generated unique set ID", "name", doc.ContainerSet.Name, "id", doc.ContainerSet.ID)
 
-	if err := d.pullImages(ctx, doc, apiClient); err != nil {
+	if err := d.pullImages(ctx, doc); err != nil {
 		slog.Debug("Failed to deploy ContainerSet", "name", doc.ContainerSet.Name, "error", err)
 		return err
 	}
-	if err := d.startAndCreateContainers(ctx, doc, apiClient); err != nil {
+	if err := d.startAndCreateContainers(ctx, doc); err != nil {
 		slog.Debug("Failed to deploy ContainerSet", "name", doc.ContainerSet.Name, "error", err)
 		return err
 	}
@@ -39,13 +76,13 @@ func (d *Deployer) DeployContainerSet_v1_0(ctx context.Context, doc *docs.Contai
 }
 
 // TODO: add different image pull policies
-func (d *Deployer) pullImages(ctx context.Context, doc *docs.ContainerSetDocumentV_1_0, apiClient *client.Client) error {
+func (d *Deployer) pullImages(ctx context.Context, doc *docs.ContainerSetDocumentV_1_0) error {
 	eg := errgroup.Group{}
 
 	for _, ctrDef := range doc.ContainerSet.Containers {
 		eg.Go(func() error {
 			slog.Debug("Checking if container image is in local registry...", "image", ctrDef.Image)
-			_, err := apiClient.ImageInspect(ctx, ctrDef.Image)
+			_, err := d.apiClient.ImageInspect(ctx, ctrDef.Image)
 			if !errdefs.IsNotFound(err) {
 				slog.Debug("Container image is in local registry", "image", ctrDef.Image)
 				return nil
@@ -54,7 +91,7 @@ func (d *Deployer) pullImages(ctx context.Context, doc *docs.ContainerSetDocumen
 			}
 
 			slog.Debug("Pulling container image from remote registry...", "image", ctrDef.Image)
-			res, err := apiClient.ImagePull(ctx, ctrDef.Image, client.ImagePullOptions{
+			res, err := d.apiClient.ImagePull(ctx, ctrDef.Image, client.ImagePullOptions{
 				Platforms: []ocispec.Platform{platforms.DefaultSpec()},
 			})
 			if err != nil {
@@ -79,14 +116,14 @@ func (d *Deployer) pullImages(ctx context.Context, doc *docs.ContainerSetDocumen
 	return nil
 }
 
-func (d *Deployer) startAndCreateContainers(ctx context.Context, doc *docs.ContainerSetDocumentV_1_0, apiClient *client.Client) error {
+func (d *Deployer) startAndCreateContainers(ctx context.Context, doc *docs.ContainerSetDocumentV_1_0) error {
 	for _, ctrDef := range doc.ContainerSet.Containers {
 		slog.Debug("Creating container in ContainerSet...", "containerSet", doc.ContainerSet.Name, "container", ctrDef.Image)
 		portMap, ok := d.portsToPortMap(ctrDef.Ports)
 		if !ok {
 			return fmt.Errorf("failed to convert port bindings slice to port map: %v", ctrDef.Ports)
 		}
-		res1, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+		res1, err := d.apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
 			Config: &container.Config{
 				AttachStderr: true,
 				AttachStdin:  true,
@@ -119,7 +156,7 @@ func (d *Deployer) startAndCreateContainers(ctx context.Context, doc *docs.Conta
 		slog.Debug("Created container in ContainerSet", "containerSet", doc.ContainerSet.Name, "container", ctrDef.Image, "ID", res1.ID)
 
 		slog.Debug("Starting container in ContainerSet...", "containerSet", doc.ContainerSet.Name, "ID", res1.ID)
-		res2, err := apiClient.ContainerStart(ctx, res1.ID, client.ContainerStartOptions{})
+		res2, err := d.apiClient.ContainerStart(ctx, res1.ID, client.ContainerStartOptions{})
 		if err != nil {
 			slog.Debug("Failed to start container in ContainerSet", "containerSet", doc.ContainerSet.Name, "ID", res1.ID, "error", err)
 			return err

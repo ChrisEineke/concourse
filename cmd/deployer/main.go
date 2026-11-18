@@ -7,5 +7,6 @@ import (
 func main() {
 	app := &concourse.DeployerApp{}
 	app.Configure()
+	defer app.Stop()
 	app.Run()
 }
